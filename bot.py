@@ -60,7 +60,7 @@ async def check_processing_status(process_id):
 
 def modify_dropbox_link(dropbox_link):
     """Dropbox লিঙ্কে dl=0 কে raw=1 তে পরিবর্তন করুন"""
-    return dropbox_link.replace("dl=0", "raw=1")
+    return dropbox_link.replace("&dl=0", "@raw=1")
 
 async def add_hd_sd_links_to_api(hd_link, sd_link):
     """HD এবং SD লিঙ্ক API তে পোস্ট করুন"""
