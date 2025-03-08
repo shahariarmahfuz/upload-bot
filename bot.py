@@ -90,33 +90,100 @@ async def start(event):
     user_episodes_data[event.sender_id] = [] # এপিসোড ডেটা রিসেট করুন
     await event.reply("Hello! Use /add {video title} to start adding a new video.")
 
-@client.on(events.NewMessage(pattern=r'/add (.+)'))
+
+@client.on(events.NewMessage(pattern=r'/add(\d+)?\s(.+)'))
 async def add_title(event):
-    """/add কমান্ড হ্যান্ডলার এবং প্রথম এপিসোডের টাইটেল গ্রহণ"""
-    title = event.pattern_match.group(1).strip()
-    user_id = event.sender_id
-    user_states[user_id] = {'state': WAITING_HD_VIDEO, 'title': title, 'hd_file': None, 'sd_file': None, 'episode_count': 1} # episode_count সেট করুন
-    user_episodes_data[user_id] = [] # Ensure episode data is initialized for the user
-    user_episodes_data[user_id].append({'title': title, 'hd_file': None, 'sd_file': None}) # প্রথম এপিসোড ডেটা যোগ করুন
-    await event.reply(f"Episode 1 Title '{title}' added. Now, please send the HD video for Episode 1.")
-
-
-@client.on(events.NewMessage(pattern=r'/add(\d+) (.+)'))
-async def add_title_n(event):
-    """/add2, /add3, ... কমান্ড হ্যান্ডলার এবং পরবর্তী এপিসোডের টাইটেল গ্রহণ"""
-    episode_number = int(event.pattern_match.group(1))
+    """হ্যান্ডল /add এবং /add2, /add3 ইত্যাদি কমান্ড"""
+    episode_number = 1
     title = event.pattern_match.group(2).strip()
     user_id = event.sender_id
 
-    if user_states.get(user_id, {}).get('state') not in [WAITING_CONFIRMATION, IDLE, PROCESSING_ALL_EPISODES]:
-        await event.reply("Please complete adding videos for the current episode or use /start to begin a new session.")
+    # যদি /add2, /add3 ইত্যাদি ব্যবহার করা হয়
+    if event.pattern_match.group(1):
+        episode_number = int(event.pattern_match.group(1))
+    
+    # ভ্যালিডেশন চেক করুন
+    if user_states.get(user_id, {}).get('state') not in [IDLE, WAITING_CONFIRMATION]:
+        await event.reply("Please complete the current episode or use /start.")
         return
 
-    user_states[user_id] = {'state': WAITING_HD_VIDEO, 'title': title, 'hd_file': None, 'sd_file': None, 'episode_count': episode_number}
+    # স্টেট এবং এপিসোড ডেটা আপডেট করুন
+    user_states[user_id] = {
+        'state': WAITING_HD_VIDEO,
+        'title': title,
+        'episode_count': episode_number
+    }
+    
     if user_id not in user_episodes_data:
         user_episodes_data[user_id] = []
-    user_episodes_data[user_id].append({'title': title, 'hd_file': None, 'sd_file': None}) # নতুন এপিসোড ডেটা যোগ করুন
-    await event.reply(f"Episode {episode_number} Title '{title}' added. Now, please send the HD video for Episode {episode_number}.")
+    
+    # নতুন এপিসোড যোগ করুন
+    user_episodes_data[user_id].append({
+        'title': title,
+        'hd_file': None,
+        'sd_file': None
+    })
+    
+    await event.reply(f"Episode {episode_number} Title '{title}' added. Now, send HD video for Episode {episode_number}.")
+
+
+@client.on(events.NewMessage(func=lambda e: e.message.video))
+async def handle_video(event):
+    """শুধুমাত্র ভিডিও মেসেজ হ্যান্ডেল করবে"""
+    sender_id = event.sender_id
+    state_data = user_states.get(sender_id)
+
+    if not state_data or state_data.get('state') not in [WAITING_HD_VIDEO, WAITING_SD_VIDEO]:
+        return  # শুধুমাত্র প্রাসঙ্গিক স্টেটে রেস্পন্ড করবে
+
+    current_state = state_data['state']
+    episode_count = state_data.get('episode_count', 1)
+    episode_index = episode_count - 1  # লিস্ট ইনডেক্স 0-বেসড
+
+    try:
+        episode_data = user_episodes_data[sender_id][episode_index]
+    except IndexError:
+        await event.reply("⚠️ Episode data mismatch. Use /start to reset.")
+        return
+
+    # HD ভিডিও মেসেজ সেভ করুন (ডাউনলোড নয়)
+    if current_state == WAITING_HD_VIDEO:
+        episode_data['hd_message'] = event.message  # ভিডিও মেসেজ সেভ করুন
+        user_states[sender_id]['state'] = WAITING_SD_VIDEO
+        await event.reply(f"✅ HD video received for Episode {episode_count}. Now send SD video.")
+
+    # SD ভিডিও মেসেজ সেভ করুন (ডাউনলোড নয়)
+    elif current_state == WAITING_SD_VIDEO:
+        episode_data['sd_message'] = event.message  # ভিডিও মেসেজ সেভ করুন
+        user_states[sender_id]['state'] = WAITING_CONFIRMATION
+        await event.reply("✅ SD video received. Add more? (yes/no) or /send to finish.")
+
+
+@client.on(events.NewMessage(func=lambda e: e.is_private and not e.message.video))
+async def handle_text(event):
+    """টেক্সট এবং কনফার্মেশন হ্যান্ডেল করবে"""
+    sender_id = event.sender_id
+    state_data = user_states.get(sender_id)
+    
+    if not state_data:
+        return
+    
+    text = event.text.strip().lower()
+    
+    # কনফার্মেশন স্টেট
+    if state_data['state'] == WAITING_CONFIRMATION:
+        if text in ['yes', 'y']:
+            next_episode = len(user_episodes_data[sender_id]) + 1
+            await event.reply(f"Send /add{next_episode} {{Title}} to add Episode {next_episode}.")
+            user_states[sender_id]['state'] = IDLE  # নতুন কমান্ডের জন্য অপেক্ষা
+        elif text in ['no', 'n', '/send']:
+            await send_all_episodes(event)
+        else:
+            await event.reply("⚠️ Invalid. Reply 'yes', 'no' or /send.")
+    
+    # অন্যান্য টেক্সট ইগনোর করুন
+    elif not text.startswith('/'):
+        await event.reply("❌ Invalid command. Use /add to start.")
 
 
 @client.on(events.NewMessage(pattern='/send'))
@@ -146,16 +213,18 @@ async def process_all_episodes(event):
     for episode_index, episode_data in enumerate(episodes):
         episode_number = episode_index + 1
         title = episode_data['title']
-        hd_file_path = episode_data['hd_file']
-        sd_file_path = episode_data['sd_file']
+        hd_message = episode_data.get('hd_message')
+        sd_message = episode_data.get('sd_message')
         hd_processed_link = None
         sd_processed_link = None
 
         await event.reply(f"🎬 Processing Episode {episode_number}: {title}...")
 
-        # এইচডি ভিডিও প্রসেসিং শুরু করুন
-        if hd_file_path:
-            await event.reply(f"🔄 Processing HD video for Episode {episode_number}...")
+        # HD ভিডিও ডাউনলোড এবং প্রসেসিং শুরু করুন
+        if hd_message:
+            await event.reply(f"🔄 Downloading and processing HD video for Episode {episode_number}...")
+            hd_file_path = f"temp_hd_ep{episode_number}_{hd_message.id}.mp4"
+            await hd_message.download_media(file=hd_file_path)  # HD ভিডিও ডাউনলোড করুন
             upload_response_hd = await upload_video_to_api(hd_file_path)
 
             if upload_response_hd:
@@ -177,10 +246,15 @@ async def process_all_episodes(event):
                 await event.reply(f"⚠️ Failed to start processing HD video for Episode {episode_number}.")
                 all_processed = False # set flag to false if any episode processing fails
 
+            # টেম্প ফাইল ডিলিট করুন HD
+            if os.path.exists(hd_file_path):
+                os.remove(hd_file_path)
 
-        # এসডি ভিডিও প্রসেসিং শুরু করুন
-        if sd_file_path:
-            await event.reply(f"🔄 Processing SD video for Episode {episode_number}...")
+        # SD ভিডিও ডাউনলোড এবং প্রসেসিং শুরু করুন
+        if sd_message:
+            await event.reply(f"🔄 Downloading and processing SD video for Episode {episode_number}...")
+            sd_file_path = f"temp_sd_ep{episode_number}_{sd_message.id}.mp4"
+            await sd_message.download_media(file=sd_file_path)  # SD ভিডিও ডাউনলোড করুন
             upload_response_sd = await upload_video_to_api(sd_file_path)
 
             if upload_response_sd:
@@ -202,6 +276,10 @@ async def process_all_episodes(event):
                 await event.reply(f"⚠️ Failed to start processing SD video for Episode {episode_number}.")
                 all_processed = False # set flag to false if any episode processing fails
 
+            # টেম্প ফাইল ডিলিট করুন SD
+            if os.path.exists(sd_file_path):
+                os.remove(sd_file_path)
+
         # HD এবং SD লিঙ্ক API তে যুক্ত করুন এবং ফিনাল URL তৈরি করুন প্রতি এপিসোডের জন্য
         if hd_processed_link and sd_processed_link:
             final_api_response = await add_hd_sd_links_to_api(hd_processed_link, sd_processed_link)
@@ -216,13 +294,6 @@ async def process_all_episodes(event):
              await event.reply(f"⚠️ Failed to process one or both videos completely for Episode {episode_number}: {title}.")
              all_processed = False # set flag to false if any episode processing fails
 
-        # টেম্প ফাইল ডিলিট করুন HD and SD
-        if os.path.exists(episode_data['hd_file']):
-            os.remove(episode_data['hd_file'])
-        if os.path.exists(episode_data['sd_file']):
-            os.remove(episode_data['sd_file'])
-
-
     if all_processed:
         await event.reply(f"✅ All episodes processed successfully!\n\n{final_links_text}")
     else:
@@ -230,74 +301,6 @@ async def process_all_episodes(event):
 
     user_states[user_id]['state'] = IDLE # রিসেট স্টেট
     user_episodes_data[user_id] = [] # clear episode data after processing
-
-
-@client.on(events.NewMessage)
-async def handle_video(event):
-    """ভিডিও মেসেজ হ্যান্ডলার"""
-    sender_id = event.sender_id
-    state_data = user_states.get(sender_id)
-
-    if state_data is None:
-        return  # যদি state_data না থাকে, তাহলে কিছু করবেন না
-
-    current_state = state_data.get('state', IDLE)
-    episode_count = state_data.get('episode_count', 1) # এপিসোড নাম্বার পান, ডিফল্ট 1
-
-    if current_state == WAITING_HD_VIDEO and event.message.video:
-        # এইচডি ভিডিও পাওয়া গেছে, কিন্তু ডাউনলোড করবেন না
-        episode_data = user_episodes_data[sender_id][-1] # বর্তমান এপিসোড ডেটা পান
-        episode_data['hd_file'] = f"temp_hd_ep{episode_count}_{event.message.id}.mp4" # এপিসোড নম্বর যোগ করুন
-        await event.download_media(file=episode_data['hd_file']) # HD ফাইল ডাউনলোড করুন
-        user_states[sender_id]['state'] = WAITING_SD_VIDEO
-        await event.reply(f"HD video for Episode {episode_count} received. Now, please send the SD video for Episode {episode_count}.")
-
-    elif current_state == WAITING_SD_VIDEO and event.message.video:
-        # এসডি ভিডিও পাওয়া গেছে
-        episode_data = user_episodes_data[sender_id][-1] # বর্তমান এপিসোড ডেটা পান
-        episode_data['sd_file'] = f"temp_sd_ep{episode_count}_{event.message.id}.mp4" # এপিসোড নম্বর যোগ করুন
-        await event.download_media(file=episode_data['sd_file']) # SD ফাইল ডাউনলোড করুন
-
-
-        user_states[sender_id]['state'] = WAITING_CONFIRMATION
-        await event.reply("SD video received. Do you want to add more episodes? (yes/no or /send to finish)")
-
-
-    elif current_state != IDLE and current_state != PROCESSING_ALL_EPISODES and not event.message.video:
-        if current_state == WAITING_HD_VIDEO:
-            await event.reply(f"Please send the HD video for Episode {episode_count}.")
-        elif current_state == WAITING_SD_VIDEO:
-            await event.reply(f"Please send the SD video for Episode {episode_count}.")
-        elif current_state == WAITING_CONFIRMATION:
-            await event.reply("Do you want to add more episodes? (yes/no or /send to finish)")
-        else:
-             await event.reply("Invalid input. Please use /add {video title} to start or send HD video after adding title.")
-
-
-@client.on(events.NewMessage)
-async def handle_text_confirmation(event):
-    """টেক্সট মেসেজ হ্যান্ডলার কনফার্মেশন এবং অন্যান্য ইনপুটের জন্য"""
-    sender_id = event.sender_id
-    state_data = user_states.get(sender_id)
-
-    if state_data is None:
-        return # যদি state_data না থাকে, তাহলে কিছু করবেন না
-
-    current_state = state_data.get('state', IDLE)
-
-    if current_state == WAITING_CONFIRMATION:
-        text = event.text.strip().lower()
-        if text in ['yes', 'y']:
-            next_episode_number = len(user_episodes_data[sender_id]) + 1
-            user_states[sender_id]['state'] = WAITING_TITLE # পরবর্তী টাইটেলের জন্য অপেক্ষা করুন
-            user_states[sender_id]['episode_count'] = next_episode_number # এপিসোড কাউন্ট আপডেট করুন
-            await event.reply(f"Okay, use /add{next_episode_number} {{Title}} to add title for Episode {next_episode_number}.")
-        elif text in ['no', 'n', '/send']:
-            await send_all_episodes(event)
-        else:
-            await event.reply("Invalid confirmation. Please reply with 'yes', 'no' or use /send to finish.")
-    elif current_state != IDLE and current_state != PROCESSING_ALL_EPISODES and not event.message.video and not event.message.text.startswith('/'):
-         await event.reply("Invalid input. Please use /add {video title} to start or send HD video after adding title.")
 
 
 # বট চালান
