@@ -15,7 +15,7 @@ BOT_TOKEN = "7479613855:AAGVHnXaJI6VmkZXbyzgmgI0G7Myi3tYR64"
 # ফ্লাস্ক API এন্ডপয়েন্ট (ভিডিও আপলোডের জন্য)
 UPLOAD_API_ENDPOINT = "https://molecular-angel-itachivai-e6c91c4d.koyeb.app/up"
 # নতুন API এন্ডপয়েন্ট (HD এবং SD লিঙ্ক যুক্ত করার জন্য)
-ADD_VIDEO_API_ENDPOINT = "https://7f8f6e2e-9c68-4880-939b-61d184b126b0-00-3n5zk13i6o9mt.sisko.replit.dev/add"
+ADD_VIDEO_API_ENDPOINT = "https://getterlink.onrender.com/add"
 # প্রসেসিং স্ট্যাটাস চেক করার জন্য API এন্ডপয়েন্ট
 CHECK_STATUS_API_ENDPOINT_BASE = "https://molecular-angel-itachivai-e6c91c4d.koyeb.app"
 
