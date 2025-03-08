@@ -87,8 +87,7 @@ async def start(event):
 async def add_title(event):
     """/add কমান্ড হ্যান্ডলার এবং টাইটেল গ্রহণ"""
     title = event.pattern_match.group(1).strip()
-    user_states[event.sender_id] = WAITING_HD_VIDEO
-    user_states[event.sender_id] = {'state': WAITING_HD_VIDEO, 'title': title, 'hd_link': None, 'sd_link': None}
+    user_states[event.sender_id] = {'state': WAITING_HD_VIDEO, 'title': title, 'hd_file': None, 'sd_file': None}
     await event.reply(f"Title '{title}' added. Now, please send the HD video.")
 
 
@@ -105,124 +104,120 @@ async def handle_video(event):
 
 
     if current_state == WAITING_HD_VIDEO and event.message.video:
-        try:
-            # ভিডিও ডাউনলোড করুন
-            temp_file_hd = f"temp_hd_{event.message.id}.mp4"
-            await event.download_media(file=temp_file_hd)
+        # এইচডি ভিডিও গ্রহণ করুন এবং SD ভিডিওর জন্য অপেক্ষা করুন
+        temp_file_hd = f"temp_hd_{event.message.id}.mp4"
+        user_states[sender_id]['hd_file'] = temp_file_hd # ফাইল পাথ সংরক্ষণ করুন
+        await event.download_media(file=temp_file_hd)
 
+        user_states[sender_id]['state'] = WAITING_SD_VIDEO
+        await event.reply("HD video received. Now, please send the SD video.")
+
+
+    elif current_state == WAITING_SD_VIDEO and event.message.video:
+        # এসডি ভিডিও গ্রহণ করুন এবং প্রসেসিং শুরু করুন
+        temp_file_sd = f"temp_sd_{event.message.id}.mp4"
+        user_states[sender_id]['sd_file'] = temp_file_sd # এসডি ফাইলের পাথ সংরক্ষণ করুন
+        await event.download_media(file=temp_file_sd)
+
+        await event.reply("SD video received. Processing started...")
+
+        hd_file_path = user_states[sender_id]['hd_file']
+        sd_file_path = user_states[sender_id]['sd_file']
+
+        hd_processed_link = None
+        sd_processed_link = None
+
+
+        # এইচডি ভিডিও প্রসেসিং শুরু করুন
+        if hd_file_path:
             await event.reply("🔄 Processing HD video...")
-
-            # এইচডি ভিডিও ফ্লাস্ক API-তে আপলোড করুন
-            upload_response_hd = await upload_video_to_api(temp_file_hd)
+            upload_response_hd = await upload_video_to_api(hd_file_path)
 
             if upload_response_hd:
                 process_id_hd = upload_response_hd['process_id']
-                hd_processed_link = None
 
                 # প্রসেসিং স্ট্যাটাস চেক করুন HD
                 while True:
                     status_response_hd = await check_processing_status(process_id_hd)
                     if status_response_hd:
                         if status_response_hd['status'] == 'success':
-                            hd_processed_link = status_response_hd['url']
+                            hd_processed_link = modify_dropbox_link(status_response_hd['url'])
                             break
                         elif status_response_hd['status'] == 'error':
                             await event.reply(f"❌ HD Video Processing Error: {status_response_hd['message']}")
                             user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-                            if os.path.exists(temp_file_hd):
-                                os.remove(temp_file_hd)
+                            if os.path.exists(hd_file_path):
+                                os.remove(hd_file_path)
+                            if os.path.exists(sd_file_path):
+                                os.remove(sd_file_path)
                             return # প্রসেসিং এরর হলে SD ভিডিও এর জন্য অপেক্ষা না করে ফিরে যান
                     await asyncio.sleep(5)
-
-                if hd_processed_link:
-                    modified_hd_link = modify_dropbox_link(hd_processed_link)
-                    user_states[sender_id]['hd_link'] = modified_hd_link
-                    user_states[sender_id]['state'] = WAITING_SD_VIDEO
-                    await event.reply("HD video processed and link saved. Now, please send the SD video.")
-                else:
-                    await event.reply("⚠️ Failed to process HD video.")
-                    user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-
             else:
                 await event.reply("⚠️ Failed to start processing HD video.")
                 user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-
-            # টেম্প ফাইল ডিলিট করুন
-            if os.path.exists(temp_file_hd):
-                os.remove(temp_file_hd)
-
-
-        except Exception as e:
-            await event.reply(f"❌ Error processing HD video: {str(e)}")
-            user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-            if os.path.exists(temp_file_hd):
-                os.remove(temp_file_hd)
+                if os.path.exists(hd_file_path):
+                    os.remove(hd_file_path)
+                if os.path.exists(sd_file_path):
+                    os.remove(sd_file_path)
+                return
 
 
-    elif current_state == WAITING_SD_VIDEO and event.message.video:
-        try:
-            # ভিডিও ডাউনলোড করুন SD
-            temp_file_sd = f"temp_sd_{event.message.id}.mp4"
-            await event.download_media(file=temp_file_sd)
-
+        # এসডি ভিডিও প্রসেসিং শুরু করুন
+        if sd_file_path:
             await event.reply("🔄 Processing SD video...")
-
-            # এসডি ভিডিও ফ্লাস্ক API-তে আপলোড করুন
-            upload_response_sd = await upload_video_to_api(temp_file_sd)
+            upload_response_sd = await upload_video_to_api(sd_file_path)
 
             if upload_response_sd:
                 process_id_sd = upload_response_sd['process_id']
-                sd_processed_link = None
 
                 # প্রসেসিং স্ট্যাটাস চেক করুন SD
                 while True:
                     status_response_sd = await check_processing_status(process_id_sd)
                     if status_response_sd:
                         if status_response_sd['status'] == 'success':
-                            sd_processed_link = status_response_sd['url']
+                            sd_processed_link = modify_dropbox_link(status_response_sd['url'])
                             break
                         elif status_response_sd['status'] == 'error':
                             await event.reply(f"❌ SD Video Processing Error: {status_response_sd['message']}")
                             user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-                            if os.path.exists(temp_file_sd):
-                                os.remove(temp_file_sd)
+                            if os.path.exists(hd_file_path):
+                                os.remove(hd_file_path)
+                            if os.path.exists(sd_file_path):
+                                os.remove(sd_file_path)
                             return # প্রসেসিং এরর হলে HD ভিডিও এর জন্য অপেক্ষা না করে ফিরে যান
-
                     await asyncio.sleep(5)
-
-                if sd_processed_link:
-                    modified_sd_link = modify_dropbox_link(sd_processed_link)
-                    user_states[sender_id]['sd_link'] = modified_sd_link
-
-                    # HD এবং SD লিঙ্ক API তে যুক্ত করুন
-                    hd_link = user_states[sender_id]['hd_link']
-                    final_api_response = await add_hd_sd_links_to_api(hd_link, modified_sd_link)
-
-                    if final_api_response and 'url' in final_api_response:
-                        final_url = final_api_response['url']
-                        await event.reply(f"✅ Both HD and SD videos processed!\nFinal URL: {final_url}")
-                    else:
-                        await event.reply("⚠️ Failed to generate final URL.")
-
-                    user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-
-                else:
-                    await event.reply("⚠️ Failed to process SD video.")
-                    user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
             else:
                 await event.reply("⚠️ Failed to start processing SD video.")
                 user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
+                if os.path.exists(hd_file_path):
+                    os.remove(hd_file_path)
+                if os.path.exists(sd_file_path):
+                    os.remove(sd_file_path)
+                return
 
-            # টেম্প ফাইল ডিলিট করুন SD
-            if os.path.exists(temp_file_sd):
-                os.remove(temp_file_sd)
+
+        # HD এবং SD লিঙ্ক API তে যুক্ত করুন এবং ফাইনাল URL পাঠান
+        if hd_processed_link and sd_processed_link:
+            final_api_response = await add_hd_sd_links_to_api(hd_processed_link, sd_processed_link)
+
+            if final_api_response and 'url' in final_api_response:
+                final_url = final_api_response['url']
+                await event.reply(f"✅ Both HD and SD videos processed!\nFinal URL: {final_url}")
+            else:
+                await event.reply("⚠️ Failed to generate final URL.")
+        else:
+             await event.reply("⚠️ Failed to process one or both videos completely.")
 
 
-        except Exception as e:
-            await event.reply(f"❌ Error processing SD video: {str(e)}")
-            user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
-            if os.path.exists(temp_file_sd):
-                os.remove(temp_file_sd)
+        user_states[sender_id]['state'] = IDLE # রিসেট স্টেট
+
+        # টেম্প ফাইল ডিলিট করুন HD and SD
+        if os.path.exists(hd_file_path):
+            os.remove(hd_file_path)
+        if os.path.exists(sd_file_path):
+            os.remove(sd_file_path)
+
+
     elif current_state != IDLE and not event.message.video:
         if current_state == WAITING_HD_VIDEO:
             await event.reply("Please send the HD video.")
